@@ -4,6 +4,7 @@ import base64
 import dataclasses
 import time
 from typing import Optional
+import numpy as np
 
 from datatypes import *
 
@@ -32,8 +33,9 @@ async def listen(interaction: discord.Interaction,
                  prompt: str,
                  end_prompt: Optional[str],
                  num_inference_steps: Optional[int]=50,
-                 alpha: Optional[float]=0.75,
-                 seed_image: Optional[str]="og_beat"):
+                 alpha: Optional[float]=None,
+                 seed_image: Optional[str]="og_beat",
+                 num_outputs: Optional[int]=3):
     await interaction.response.defer()
 
     name = prompt.replace(" ", "_")
@@ -41,26 +43,50 @@ async def listen(interaction: discord.Interaction,
     if end_prompt is None:
         end_prompt = prompt
     else:
-        name = name + end_prompt.replace(" ", "_")
-    input = InferenceInput(
-        start=PromptInput(
-            prompt=prompt,
-            seed=int(time.time())
-        ),
-        end=PromptInput(
-            prompt=end_prompt,
-            seed=int(time.time()) + 1),
-        alpha=alpha,
-        num_inference_steps=num_inference_steps,
-        seed_image_id=seed_image
-    )
-    resp = requests.post(url, json=dataclasses.asdict(input))
-    audio = base64.b64decode(resp.json()['audio'])
+        name = name + '_' + end_prompt.replace(" ", "_")
 
     filename = f'outputs/{name}.mp3'
-    with open(filename, 'wb') as f:
-        f.write(audio)
+    fp = open(filename, 'ab')
+    fp.seek(0)
+    fp.truncate()
+
+    start_seed = int(time.time())
+    end_seed = start_seed + 1
+    if num_outputs is not None:
+        if alpha is not None:
+            alphas = num_outputs * [alpha]
+        else:
+            alphas = np.linspace(0, 1, num=num_outputs)
+    else:
+        alphas = [alpha]
+
+    for alpha in alphas:
+        input = InferenceInput(
+            start=PromptInput(
+                prompt=prompt,
+                seed=start_seed
+            ),
+            end=PromptInput(
+                prompt=end_prompt,
+                seed=end_seed
+            ),
+            alpha=alpha,
+            num_inference_steps=num_inference_steps,
+            seed_image_id=seed_image
+        )
+        resp = requests.post(url, json=dataclasses.asdict(input))
+        audio = base64.b64decode(resp.json()['audio'])
+
+        fp.write(audio)
 
     await interaction.followup.send(file=discord.File(filename))
+
+
+@tree.command(guild=guild)
+async def help(interaction: discord.Interaction):
+    await interaction.message.reply("
+    *Basic Commands:*
+    ")
+
 
 client.run(token)
