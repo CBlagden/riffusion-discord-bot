@@ -1,0 +1,5 @@
+{
+    "token": "Insert your bot token here",
+    "guild": 1337,
+    "url": "http://127.0.0.1:3013/run_inference"
+}
