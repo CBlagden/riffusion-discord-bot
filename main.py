@@ -3,6 +3,8 @@ import requests
 import base64
 import dataclasses
 import time
+import aiohttp
+import logging
 from typing import Optional
 import numpy as np
 
@@ -10,6 +12,9 @@ from datatypes import *
 
 import discord
 from discord import app_commands
+from discord import voice_client
+
+handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 config = json.load(open('config.json', 'r'))
 token = config['token']
@@ -32,11 +37,10 @@ tree = app_commands.CommandTree(client)
 async def listen(interaction: discord.Interaction,
                  prompt: str,
                  end_prompt: Optional[str],
-                 num_inference_steps: Optional[int]=50,
-                 alpha: Optional[float]=None,
                  seed_image: Optional[str]="og_beat",
-                 num_outputs: Optional[int]=3):
+                 num_outputs: int=3):
     await interaction.response.defer()
+    print("Generating audio...")
 
     name = prompt.replace(" ", "_")
 
@@ -52,15 +56,31 @@ async def listen(interaction: discord.Interaction,
 
     start_seed = int(time.time())
     end_seed = start_seed + 1
-    if num_outputs is not None:
-        if alpha is not None:
-            alphas = num_outputs * [alpha]
-        else:
-            alphas = np.linspace(0, 1, num=num_outputs)
-    else:
-        alphas = [alpha]
+    alphas = np.linspace(0, 1, num=num_outputs)
 
-    for alpha in alphas:
+
+    vc_channel = interaction.user.voice.channel
+    vc_conn = discord.utils.get(client.voice_clients, guild=interaction.guild)
+    if vc_conn is None or not vc_conn.is_connected():
+        vc_conn = await vc_channel.connect()
+
+    def repeat(vc_conn, audio_queue):
+       if len(audio_queue) == 0:
+           print("Queue is empty...")
+           return None
+
+       fp = open('outputs/tmp.mp3', 'wb')
+       while len(audio_queue) > 0:
+           audio = audio_queue.pop(0)
+           fp.write(audio)
+       fp.close()
+
+       print("Playing clip...")
+       vc_conn.play(discord.FFmpegPCMAudio('outputs/tmp.mp3'),
+                       after=lambda e: repeat(vc_conn, audio_queue))
+
+    audio_queue = []
+    for i, alpha in enumerate(alphas):
         input = InferenceInput(
             start=PromptInput(
                 prompt=prompt,
@@ -71,22 +91,18 @@ async def listen(interaction: discord.Interaction,
                 seed=end_seed
             ),
             alpha=alpha,
-            num_inference_steps=num_inference_steps,
             seed_image_id=seed_image
         )
         resp = requests.post(url, json=dataclasses.asdict(input))
         audio = base64.b64decode(resp.json()['audio'])
-
         fp.write(audio)
+        audio_queue.append(audio)
 
+        if i == 0:
+            repeat(vc_conn, audio_queue)
+
+    fp.close()
     await interaction.followup.send(file=discord.File(filename))
 
 
-@tree.command(guild=guild)
-async def help(interaction: discord.Interaction):
-    await interaction.message.reply("
-    *Basic Commands:*
-    ")
-
-
-client.run(token)
+client.run(token, log_handler=handler, log_level=logging.INFO)
